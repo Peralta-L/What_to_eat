@@ -12,12 +12,13 @@ async def connect_db():
     """Call this once on FastAPI startup (e.g. in a startup event/lifespan)."""
     global pool
     pool = await asyncpg.create_pool(dsn=os.environ["DATABASE_URL"])
-
+    print("Database pool connected")
 
 async def close_db():
     """Call this once on FastAPI shutdown."""
     if pool:
         await pool.close()
+        print("Database pool closed")
 
 
 async def get_db():
@@ -37,7 +38,6 @@ async def run_schema():
         print("Schema applied successfully.")
     finally:
         await conn.close()
-
 
 if __name__ == "__main__":
     import asyncio

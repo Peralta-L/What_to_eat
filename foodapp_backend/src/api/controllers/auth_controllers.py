@@ -5,7 +5,7 @@ from src.utils.auth_util import hash_password, create_access_token, verify_passw
 from src.schemas.users_schema import Users
 
 async def register(user: Users, db=Depends(get_db)):
-    hashed_password = hash_password(user.password)
+    hashed_password = await hash_password(user.password)
     if not hashed_password:
         raise HTTPException(status_code=500, detail="Error hashing password")
     if not db:
@@ -26,7 +26,7 @@ async def login(username: str, password: str, db=Depends(get_db)):
     user = await db.fetchrow("SELECT * FROM users WHERE username = $1", username)
     if not user:
         raise HTTPException(status_code=400, detail="Invalid username or password")
-    if not verify_password(password, user["password"]):
+    if not await verify_password(password, user["password"]):
         raise HTTPException(status_code=400, detail="Invalid username or password")
     access_token = create_access_token({"sub": username, "user_id": user["id"]})
     return {"access_token": access_token, "token_type": "bearer"}

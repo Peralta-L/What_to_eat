@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS items (
     users_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     quantity NUMERIC NOT NULL,
     unit TEXT NOT NULL,
-    experation_date DATE,
+    expiration_date DATE,
     UNIQUE (ingredient_id, users_id)
 );
 
@@ -53,4 +53,22 @@ CREATE TABLE IF NOT EXISTS preferences (
     cuisine_pref TEXT,
     diet_pref TEXT,
     is_glutenfree BOOLEAN DEFAULT FALSE
+);
+
+-- AI-generated recipes (raw model output, stored so it can be favorited/revisited)
+CREATE TABLE IF NOT EXISTS recipes (
+    id SERIAL PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'ai',
+    request TEXT,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Which user saved/favorited which recipe
+CREATE TABLE IF NOT EXISTS saved_recipes (
+    id SERIAL PRIMARY KEY,
+    users_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    saved_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (users_id, recipe_id)
 );

@@ -1,7 +1,7 @@
 from asyncpg import UniqueViolationError
 from fastapi import Depends, HTTPException
-from foodapp_backend.src.core.database import get_db
-from foodapp_backend.src.schemas.food_schema import Food
+from src.core.database import get_db
+from src.schemas.food_schema import Food
 
 async def add_food_controller(user_id: int, food: Food, db=Depends(get_db)):
     if not db:

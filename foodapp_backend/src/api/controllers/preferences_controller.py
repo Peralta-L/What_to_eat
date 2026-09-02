@@ -26,7 +26,7 @@ async def get_gluten_free_controller(user_id: int, db=Depends(get_db)):
     gluten_free = await db.fetch("SELECT is_glutenfree FROM preferences WHERE users_id = $1", user_id)
     return {"gluten_free": gluten_free[0]["is_glutenfree"] if gluten_free else False}
 
-async def update_preferences_controller(user_id: int, allergies: list[str] = [], cuisines: list[str] = [], diets: list[str] = [], db=Depends(get_db), gluten_free: bool = False):
+async def update_preferences_controller(user_id, allergies, cuisines, diets, gluten_free, db):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
     await db.execute("DELETE FROM preferences WHERE users_id = $1", user_id)

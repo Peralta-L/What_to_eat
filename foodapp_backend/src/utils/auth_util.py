@@ -1,7 +1,8 @@
 from passlib.context import CryptContext
 from jose import jwt
 from fastapi.security import OAuth2PasswordBearer
-from fastapi import  HTTPException, status, Depends, JWTError
+from fastapi import HTTPException, status, Depends
+from jose import jwt, JWTError
 import os
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

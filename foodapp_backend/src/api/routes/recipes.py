@@ -1,34 +1,31 @@
 from fastapi import APIRouter, Depends, HTTPException
-from foodapp_backend.src.core.database import get_db
+from src.core.database import get_db
+from src.utils.auth_util import get_current_user
+from src.api.controllers.recipe_controller import ( save_recipe_controller, get_saved_recipes_controller, unsave_recipe_controller,
+)
 
 router = APIRouter()
 
-@router.get("/recipes")
-async def get_recipes(db=Depends(get_db)):
-    if not db:
-        raise HTTPException(status_code=500, detail="Database connection error")
-    recipes = await db.fetch("SELECT * FROM recipes")
-    return {"recipes": [dict(recipe) for recipe in recipes]}
 
-@router.get("/recipes/{recipe_id}")
-async def get_recipe(recipe_id: int, db=Depends(get_db)):
-    if not db:
-        raise HTTPException(status_code=500, detail="Database connection error")
-    recipe = await db.fetchrow("SELECT * FROM recipes WHERE id = $1", recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Recipe not found")
-    return {"recipe": dict(recipe)}
+@router.post("/recipes/save/{recipe_id}")
+async def save_recipe(recipe_id: int, user_id: int = Depends(get_current_user), db=Depends(get_db)):
+    try:
+        return await save_recipe_controller(user_id, recipe_id, db)
+    except HTTPException as e:
+        raise e
 
-@router.get("/recipes/search")
-async def search_recipes(query: str, db=Depends(get_db)):
-    if not db:
-        raise HTTPException(status_code=500, detail="Database connection error")
-    recipes = await db.fetch("SELECT * FROM recipes WHERE name ILIKE $1", f"%{query}%")
-    return {"recipes": [dict(recipe) for recipe in recipes]}
 
-@router.get("/recipes/ingredient/{ingredient}")
-async def get_recipes_by_ingredient(ingredient: str, db=Depends(get_db)):
-    if not db:
-        raise HTTPException(status_code=500, detail="Database connection error")
-    recipes = await db.fetch("SELECT * FROM recipes WHERE ingredients ILIKE $1", f"%{ingredient}%")
-    return {"recipes": [dict(recipe) for recipe in recipes]}
+@router.get("/recipes/saved")
+async def get_saved_recipes(user_id: int = Depends(get_current_user), db=Depends(get_db)):
+    try:
+        return await get_saved_recipes_controller(user_id, db)
+    except HTTPException as e:
+        raise e
+
+
+@router.delete("/recipes/saved/{recipe_id}")
+async def unsave_recipe(recipe_id: int, user_id: int = Depends(get_current_user), db=Depends(get_db)):
+    try:
+        return await unsave_recipe_controller(user_id, recipe_id, db)
+    except HTTPException as e:
+        raise e
