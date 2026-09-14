@@ -5,7 +5,15 @@ from src.utils.auth_util import hash_password, create_access_token, verify_passw
 from src.schemas.users_schema import Users
 
 async def register(user: Users, db=Depends(get_db)):
+    print("PASSWORD RAW:", repr(user.password))
+    print("TYPE:", type(user.password))
+    print("BYTE LENGTH:", len(user.password.encode("utf-8")))
+
     hashed_password = await hash_password(user.password)
+    print("PASSWORD RAW:", repr(user.password))
+    print("TYPE:", type(user.password))
+    print("BYTE LENGTH:", len(user.password.encode("utf-8")))
+
     if not hashed_password:
         raise HTTPException(status_code=500, detail="Error hashing password")
     if not db:
