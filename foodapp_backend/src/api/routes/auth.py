@@ -17,9 +17,9 @@ async def register_route(user: Users, db=Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/login")
-async def login_route(credentials: Login, db=Depends(get_db)):
+async def login_route(credentials:Login, db=Depends(get_db)):
     try:
-        return await login(credentials.user, credentials.password, db)
+        return await login(credentials, db)
     except HTTPException as e:
         raise e
     except Exception as e:
