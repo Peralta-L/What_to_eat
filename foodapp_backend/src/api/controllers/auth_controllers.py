@@ -1,18 +1,12 @@
 from asyncpg import UniqueViolationError
 from fastapi import Depends, HTTPException
+from src.schemas.login_schema import Login
 from src.core.database import get_db
 from src.utils.auth_util import hash_password, create_access_token, verify_password
 from src.schemas.users_schema import Users
 
 async def register(user: Users, db=Depends(get_db)):
-    print("PASSWORD RAW:", repr(user.password))
-    print("TYPE:", type(user.password))
-    print("BYTE LENGTH:", len(user.password.encode("utf-8")))
-
     hashed_password = hash_password(user.password)
-    print("PASSWORD RAW:", repr(user.password))
-    print("TYPE:", type(user.password))
-    print("BYTE LENGTH:", len(user.password.encode("utf-8")))
 
     if not hashed_password:
         raise HTTPException(status_code=500, detail="Error hashing password")
@@ -28,13 +22,15 @@ async def register(user: Users, db=Depends(get_db)):
         raise HTTPException(status_code=400, detail="Duplicate value")
     return {"message": "User registered successfully"}
 
-async def login(username: str, password: str, db=Depends(get_db)):
+async def login(login: Login, db=Depends(get_db)):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
-    user = await db.fetchrow("SELECT * FROM users WHERE username = $1", username)
-    if not user:
+    user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", login.user)
+
+    if not await verify_password(login.password, user["password"]):
         raise HTTPException(status_code=400, detail="Invalid username or password")
-    if not await verify_password(password, user["password"]):
-        raise HTTPException(status_code=400, detail="Invalid username or password")
-    access_token = create_access_token({"sub": username, "user_id": user["id"]})
+    access_token = create_access_token({
+        "sub": str(user["id"]), 
+        "user_id": user["id"]
+    })
     return {"access_token": access_token, "token_type": "bearer"}
