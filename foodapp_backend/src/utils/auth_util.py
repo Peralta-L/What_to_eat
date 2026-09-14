@@ -9,13 +9,13 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
 
-async def hash_password(password: str):
+def hash_password(password: str):
     return pwd_context.hash(password)
 
-async def create_access_token(data: dict):
+def create_access_token(data: dict):
     return jwt.encode(data, os.getenv("SECRET_KEY"), algorithm="HS256")
 
-async def verify_password(plain_password: str, hashed_password: str):
+def verify_password(plain_password: str, hashed_password: str):
     return pwd_context.verify(plain_password, hashed_password)
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
