@@ -22,15 +22,16 @@ async def register(user: Users, db=Depends(get_db)):
         raise HTTPException(status_code=400, detail="Duplicate value")
     return {"message": "User registered successfully"}
 
-async def login(login: Login, db=Depends(get_db)):
+async def login(credentials: Login, db=Depends(get_db)):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
-    user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", login.user)
+    user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", credentials.username)
 
-    if not verify_password(login.password, user["password"]):
+    if not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=400, detail="Invalid username or password")
     access_token = create_access_token({
         "sub": str(user["id"]), 
         "user_id": user["id"]
     })
+    
     return {"access_token": access_token, "token_type": "bearer"}

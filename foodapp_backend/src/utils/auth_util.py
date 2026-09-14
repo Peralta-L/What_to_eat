@@ -3,8 +3,10 @@ from jose import jwt
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import HTTPException, status, Depends
 from jose import jwt, JWTError
+from dotenv import load_dotenv
 import os
 
+load_dotenv()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
@@ -16,6 +18,7 @@ def create_access_token(data: dict):
     return jwt.encode(data, os.getenv("SECRET_KEY"), algorithm="HS256")
 
 def verify_password(plain_password: str, hashed_password: str):
+    print("SECRET_KEY:", repr(os.getenv("SECRET_KEY")))
     return pwd_context.verify(plain_password, hashed_password)
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
