@@ -9,7 +9,7 @@ async def register(user: Users, db=Depends(get_db)):
     print("TYPE:", type(user.password))
     print("BYTE LENGTH:", len(user.password.encode("utf-8")))
 
-    hashed_password = await hash_password(user.password)
+    hashed_password = hash_password(user.password)
     print("PASSWORD RAW:", repr(user.password))
     print("TYPE:", type(user.password))
     print("BYTE LENGTH:", len(user.password.encode("utf-8")))
