@@ -25,7 +25,7 @@ async def register(user: Users, db=Depends(get_db)):
 async def login(credentials: Login, db=Depends(get_db)):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
-    user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", credentials.username)
+    user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", credentials.user)
 
     if not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=400, detail="Invalid username or password")
