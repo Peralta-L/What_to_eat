@@ -28,9 +28,12 @@ async def login(credentials: Login, db=Depends(get_db)):
     user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", credentials.user)
     
     print (user)  # Debugging line
-
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid username or password")
+    
     if not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=400, detail="Invalid username or password")
+    
     access_token = create_access_token({
         "sub": str(user["id"]), 
         "user_id": user["id"]
