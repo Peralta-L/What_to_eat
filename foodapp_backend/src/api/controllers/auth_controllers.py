@@ -20,12 +20,14 @@ async def register(user: Users, db=Depends(get_db)):
         if "email" in str(e):
             raise HTTPException(status_code=400, detail="Email already exists")
         raise HTTPException(status_code=400, detail="Duplicate value")
-    return {"message": "User registered successfully"}
+    return {"message": "User registered successfully!"}
 
 async def login(credentials: Login, db=Depends(get_db)):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
     user = await db.fetchrow("SELECT * FROM users WHERE username = $1 OR email = $1", credentials.user)
+
+    print (user)  # Debugging line
 
     if not verify_password(credentials.password, user["password"]):
         raise HTTPException(status_code=400, detail="Invalid username or password")
