@@ -36,23 +36,23 @@ async def _fetch_from_usda(ingredient: str) -> dict | None:
         "carbs":    _get_nutrient(nutrients, "205"),
     }
 
-async def search_ingredient_controller(ingredient: str, db):
+async def search_ingredient_controller(search: str, db):
     try:
         rows = await db.fetch(                            # ← fetch for multiple
             """
             SELECT id, name, category, calories, protein, fat, carbs
             FROM global_ingredients WHERE name ILIKE $1 LIMIT 5
             """,
-            f"%{ingredient}%"
+            f"%{search}%"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
     if rows:
         return {"ingredients": [dict(row) for row in rows], "source": "global"}
 
     try:
-        data = await _fetch_from_usda(ingredient)
+        data = await _fetch_from_usda(search)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"USDA API error: {str(e)}")
 
