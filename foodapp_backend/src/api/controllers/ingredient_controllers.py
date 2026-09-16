@@ -16,7 +16,7 @@ async def _fetch_from_usda(ingredient: str) -> list[dict]:
         resp = await client.get(
             f"{USDA_BASE}/foods/search",
             params={
-                "query": f"{ingredient}*",
+                "query": ingredient,
                 "pageSize": 20,
                 "dataType": "Foundation,SR Legacy",
                 "api_key": settings.USDA_API_KEY,
