@@ -11,55 +11,58 @@ def _get_nutrient(nutrients: list, number: str) -> float | None:
             return n.get("value")
     return None
 
-async def _fetch_from_usda(ingredient: str) -> dict | None:
+async def _fetch_from_usda(ingredient: str) -> list[dict]:
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{USDA_BASE}/foods/search",
-            params={"query": ingredient, "pageSize": 1, "api_key": settings.USDA_API_KEY},
+            params={
+                "query": ingredient,
+                "pageSize": 5,
+                "dataType": "Foundation,SR Legacy",
+                "api_key": settings.USDA_API_KEY,
+            },
         )
         resp.raise_for_status()
         foods = resp.json().get("foods", [])
 
-    if not foods:
-        return None
+    results = []
+    for food in foods:
+        nutrients = food.get("foodNutrients", [])
+        results.append({
+            "fdc_id":   food["fdcId"],
+            "name":     food["description"],
+            "category": food.get("foodCategory", None),
+            "calories": _get_nutrient(nutrients, "208"),
+            "protein":  _get_nutrient(nutrients, "203"),
+            "fat":      _get_nutrient(nutrients, "204"),
+            "carbs":    _get_nutrient(nutrients, "205"),
+        })
+    return results
 
-    food = foods[0]
-    nutrients = food.get("foodNutrients", [])
-
-    return {
-        "fdc_id":   food["fdcId"],
-        "name":     food["description"],
-        "category": food.get("foodCategory", None),
-        "calories": _get_nutrient(nutrients, "208"),
-        "protein":  _get_nutrient(nutrients, "203"),
-        "fat":      _get_nutrient(nutrients, "204"),
-        "carbs":    _get_nutrient(nutrients, "205"),
-    }
-
-async def search_ingredient_controller(search: str, db):
+async def search_ingredient_controller(ingredient: str, db):
     try:
-        rows = await db.fetch(                            # ← fetch for multiple
+        rows = await db.fetch(
             """
             SELECT id, name, category, calories, protein, fat, carbs
             FROM global_ingredients WHERE name ILIKE $1 LIMIT 5
             """,
-            f"%{search}%"
+            f"%{ingredient}%"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
     if rows:
         return {"ingredients": [dict(row) for row in rows], "source": "global"}
 
     try:
-        data = await _fetch_from_usda(search)
+        data = await _fetch_from_usda(ingredient)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"USDA API error: {str(e)}")
 
     if not data:
         raise HTTPException(status_code=404, detail="Ingredient not found")
 
-    return {"ingredients": [data], "source": "usda"} 
+    return {"ingredients": data, "source": "usda"}
 
 
 async def add_ingredient_controller(ingredient: IngredientAdd, db):
