@@ -1,21 +1,17 @@
-from fastapi import APIRouter, Query, HTTPException
-from src.core.database import pool
+from fastapi import HTTPException
+import src.core.database as db
 
-router = APIRouter()
-
-
-@router.get("/ingredients")
-async def search_ingredients(
-    ingredient: str = Query(..., min_length=3)
+async def search_ingredient_controller(
+    ingredient: str
 ):
-    if pool is None:
+    if db.pool is None:
         raise HTTPException(
             status_code=500,
             detail="Database connection is not initialized"
         )
 
     try:
-        async with pool.acquire() as connection:
+        async with db.pool.acquire() as connection:
             rows = await connection.fetch(
                 """
                 SELECT
@@ -44,9 +40,8 @@ async def search_ingredients(
         }
 
     except Exception as e:
-        print("Ingredient search error:", e)
-
+        print("Ingredient search error:", repr(e))
         raise HTTPException(
             status_code=500,
-            detail="Could not search ingredients"
+            detail=f"Could not search ingredients: {str(e)}"
         )

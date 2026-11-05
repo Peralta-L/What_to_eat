@@ -6,7 +6,7 @@ from src.schemas.food_schema import Food
 async def add_food_controller(user_id: int, food: Food, db=Depends(get_db)):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
-    try:        
+    try:
         await db.execute("INSERT INTO foods (name, category, ingredients, calories, preparation_time, dietary_restrictions, users_id) VALUES ($1, $2, $3, $4, $5, $6, $7)", food.name, food.category, food.ingredients, food.calories, food.preparation_time, food.dietary_restrictions, user_id)
         return {"message": "Food added successfully"}
     except UniqueViolationError as e:
