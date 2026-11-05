@@ -8,16 +8,22 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL
 );
 
--- Shared ingredient reference data (from USDA lookups or manual entry)
+-- Shared ingredient reference data (I have inserted all the data from an German association or manual entry)
 CREATE TABLE IF NOT EXISTS global_ingredients (
     id SERIAL PRIMARY KEY,
-    fdc_id INTEGER UNIQUE,
+    blscode TEXT UNIQUE,
     name TEXT NOT NULL,
     category TEXT,
+
+    -- Nutritional values per 100g
     calories NUMERIC,
-    protein NUMERIC,
     fat NUMERIC,
-    carbs NUMERIC
+    saturated_fat NUMERIC,
+    carbs NUMERIC,
+    sugars NUMERIC,
+    fiber NUMERIC,
+    protein NUMERIC,
+    salt NUMERIC
 );
 
 -- A user's pantry/inventory
