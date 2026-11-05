@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from src.schemas.ingredient_schema import IngredientAdd
-from src.api.controllers.ingredient_controllers import add_ingredient_controller, search_ingredient_controller
+from src.api.controllers.ingredient_controllers import search_ingredient_controller
 from src.core.database import get_db
 
 router = APIRouter()
