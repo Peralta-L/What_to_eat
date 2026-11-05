@@ -13,13 +13,3 @@ async def search_ingredients(ingredient: str = ..., db=Depends(get_db)):
         return await search_ingredient_controller(ingredient, db)    
     except HTTPException as e:
         raise e
-    
-@router.post("/ingredients")
-async def add_ingredient(ingredient: IngredientAdd = ..., db=Depends(get_db)):
-    if not db:
-        raise HTTPException(status_code=500, detail="Database connection error")
-    try:
-        await add_ingredient_controller(ingredient, db)
-        return {"message": "Ingredient added successfully"}
-    except HTTPException as e:
-        raise e
