@@ -4,7 +4,11 @@ from src.core.database import get_db
 
 async def get_items_controller(users_id: int, db=Depends(get_db)):
     if not db:
-        raise HTTPException(status_code=500, detail="Database connection error")
+        raise HTTPException(
+            status_code=500,
+            detail="Database connection error",
+        )
+
     items = await db.fetch(
         """
         SELECT
@@ -13,8 +17,10 @@ async def get_items_controller(users_id: int, db=Depends(get_db)):
             items.quantity,
             items.unit,
             items.expiration_date,
+
             global_ingredients.name,
             global_ingredients.category,
+
             global_ingredients.calories,
             global_ingredients.fat,
             global_ingredients.saturated_fat,
@@ -23,15 +29,24 @@ async def get_items_controller(users_id: int, db=Depends(get_db)):
             global_ingredients.fiber,
             global_ingredients.protein,
             global_ingredients.salt
+
         FROM items
+
         JOIN global_ingredients
             ON items.ingredient_id = global_ingredients.id
+
         WHERE items.users_id = $1
+
         ORDER BY global_ingredients.name
         """,
         users_id,
     )
-    return {"items": [dict(item) for item in items]}
+
+    result = [dict(item) for item in items]
+
+    print("ITEMS FROM DATABASE:", result)
+
+    return {"items": result}
 
 async def add_item_controller(users_id: int, item: dict, db=Depends(get_db)):
     if not db:

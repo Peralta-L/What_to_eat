@@ -1,6 +1,11 @@
 from fastapi import APIRouter, Depends
 from src.utils.auth_util import get_current_user
-from src.api.controllers.ai_controller import generate_ai_recipe, generate_info, generate_search_recipe
+from src.api.controllers.ai_controller import (
+    generate_ai_recipe,
+    generate_info,
+    generate_search_recipe,
+    cook_recipe_controller,
+)
 from src.core.database import get_db
 
 router = APIRouter()
@@ -16,3 +21,15 @@ async def get_expiration_date(user_id: int = Depends(get_current_user), ingredie
 @router.get("/search-recipes")
 async def search_recipes(user_id: int = Depends(get_current_user), request: str = ..., db=Depends(get_db)):
     return await generate_search_recipe(user_id, request, db)
+
+@router.post("/recipes/{recipe_id}/cooked")
+async def confirm_cooked_recipe(
+    recipe_id: int,
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await cook_recipe_controller(
+        user_id,
+        recipe_id,
+        db,
+    )
