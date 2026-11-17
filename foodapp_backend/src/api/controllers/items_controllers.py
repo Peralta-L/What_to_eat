@@ -5,7 +5,21 @@ from src.core.database import get_db
 async def get_items_controller(users_id: int, db=Depends(get_db)):
     if not db:
         raise HTTPException(status_code=500, detail="Database connection error")
-    items = await db.fetch("SELECT global_ingredients.name, global_ingredients.category, items.quantity, items.unit, global_ingredients.protein, global_ingredients.carbs, global_ingredients.fat, global_ingredients.calories FROM items JOIN global_ingredients ON items.ingredient_id = global_ingredients.id WHERE items.users_id = $1", users_id)
+    items = await db.fetch(
+        """
+        SELECT items.id, items.ingredient_id, items.quantity, items.unit,
+               global_ingredients.name, global_ingredients.category,
+               global_ingredients.calories, global_ingredients.fat,
+               global_ingredients.saturated_fat, global_ingredients.carbs,
+               global_ingredients.sugars, global_ingredients.fiber,
+               global_ingredients.protein, global_ingredients.salt
+        FROM items
+        JOIN global_ingredients ON items.ingredient_id = global_ingredients.id
+        WHERE items.users_id = $1
+        ORDER BY global_ingredients.name
+        """,
+        users_id,
+    )
     return {"items": [dict(item) for item in items]}
 
 async def add_item_controller(users_id: int, item: dict, db=Depends(get_db)):
