@@ -7,14 +7,25 @@ async def get_items_controller(users_id: int, db=Depends(get_db)):
         raise HTTPException(status_code=500, detail="Database connection error")
     items = await db.fetch(
         """
-        SELECT items.id, items.ingredient_id, items.quantity, items.unit,
-               global_ingredients.name, global_ingredients.category,
-               global_ingredients.calories, global_ingredients.fat,
-               global_ingredients.saturated_fat, global_ingredients.carbs,
-               global_ingredients.sugars, global_ingredients.fiber,
-               global_ingredients.protein, global_ingredients.salt
+        SELECT
+            items.id,
+            items.ingredient_id,
+            items.quantity,
+            items.unit,
+            items.expiration_date,
+            global_ingredients.name,
+            global_ingredients.category,
+            global_ingredients.calories,
+            global_ingredients.fat,
+            global_ingredients.saturated_fat,
+            global_ingredients.carbs,
+            global_ingredients.sugars,
+            global_ingredients.fiber,
+            global_ingredients.protein,
+            global_ingredients.salt
         FROM items
-        JOIN global_ingredients ON items.ingredient_id = global_ingredients.id
+        JOIN global_ingredients
+            ON items.ingredient_id = global_ingredients.id
         WHERE items.users_id = $1
         ORDER BY global_ingredients.name
         """,

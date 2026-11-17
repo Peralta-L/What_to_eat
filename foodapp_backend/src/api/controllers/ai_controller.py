@@ -3,7 +3,8 @@ from src.api.services.ai_service import (
     generate_recipe_from_items,
     generate_search_recipe as generate_search_recipe_ai,
 )
-
+from datetime import date
+from fastapi import HTTPException
 from src.api.controllers.items_controllers import get_items_controller
 
 from src.api.controllers.preferences_controller import (get_allergies_controller, get_cuisine_controller, get_diet_controller, get_gluten_free_controller)
@@ -32,12 +33,42 @@ async def _save_recipe(db, content: str, source: str = "ai", request: str | None
     )
     return dict(row)
 
+async def generate_info(user_id: int, ingredient_id: int, db):
+    name = await db.fetchval(
+        """
+        SELECT global_ingredients.name
+        FROM items
+        JOIN global_ingredients
+            ON items.ingredient_id = global_ingredients.id
+        WHERE items.users_id = $1
+          AND items.ingredient_id = $2
+        """,
+        user_id,
+        ingredient_id,
+    )
 
-async def generate_ai_recipe(user_id: int, db):
-    items, allergies, cuisine, diet, gluten_free = await _get_user_context(user_id, db)
-    content = await generate_recipe_from_items(items, allergies, cuisine, diet, gluten_free)
-    return await _save_recipe(db, content)
-    # will have to make a loop here since the ai will suggest not only one recipe but multiple recipes
+    if not name:
+        raise HTTPException(status_code=404, detail="Ingredient not found")
+
+    expiration = await generate_expiration_date(name)
+
+    # Convert an ISO date string into a Python date if necessary
+    if isinstance(expiration, str):
+        expiration = date.fromisoformat(expiration)
+
+    await db.execute(
+        """
+        UPDATE items
+        SET expiration_date = $1
+        WHERE ingredient_id = $2
+          AND users_id = $3
+        """,
+        expiration,
+        ingredient_id,
+        user_id,
+    )
+
+    return {"expiration": expiration}
 
 
 async def generate_info(user_id: int, ingredient_id: int, db):
