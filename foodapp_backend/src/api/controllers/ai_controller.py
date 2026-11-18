@@ -1,6 +1,10 @@
+import calendar
 import json
-from datetime import date
+import re
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from uuid import UUID
+
 from fastapi import HTTPException
 
 from src.api.services.ai_service import (
@@ -8,9 +12,7 @@ from src.api.services.ai_service import (
     generate_recipe_from_items,
     generate_search_recipe as generate_search_recipe_ai,
 )
-
 from src.api.controllers.items_controllers import get_items_controller
-
 from src.api.controllers.preferences_controller import (
     get_allergies_controller,
     get_cuisine_controller,
@@ -19,20 +21,70 @@ from src.api.controllers.preferences_controller import (
 )
 
 
-# ==========================================
+# ============================================================
+# SHARED HELPERS
+# ============================================================
+
+def _decode_json_value(value):
+    """Decode JSON/JSONB values returned by asyncpg when needed."""
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _storage_life_to_date(duration_text: str, start_date: date | None = None) -> date:
+    """
+    Convert a duration such as '7 days', '2 weeks', or '3 months'
+    into a calendar date. The AI service is expected to return a
+    concise numeric duration, not a natural-language paragraph.
+    """
+    if not isinstance(duration_text, str):
+        raise ValueError("The AI did not return a storage duration.")
+
+    match = re.search(
+        r"\b(\d+)\s*(days?|weeks?|months?|years?)\b",
+        duration_text.strip().lower(),
+    )
+    if not match:
+        raise ValueError(
+            f"Unrecognized storage duration: {duration_text!r}"
+        )
+
+    amount = int(match.group(1))
+    unit = match.group(2)
+
+    if amount <= 0:
+        raise ValueError("Storage duration must be positive.")
+
+    base = start_date or date.today()
+
+    if unit.startswith("day"):
+        return base + timedelta(days=amount)
+
+    if unit.startswith("week"):
+        return base + timedelta(weeks=amount)
+
+    if unit.startswith("month"):
+        month_index = base.month - 1 + amount
+        year = base.year + month_index // 12
+        month = month_index % 12 + 1
+        day = min(base.day, calendar.monthrange(year, month)[1])
+        return date(year, month, day)
+
+    # Years: preserve month/day where possible (e.g. Feb 29 -> Feb 28).
+    year = base.year + amount
+    day = min(base.day, calendar.monthrange(year, base.month)[1])
+    return date(year, base.month, day)
+
+
+# ============================================================
 # 1. GET USER CONTEXT
-# ==========================================
+# ============================================================
 
 async def _get_user_context(user_id: int, db):
-    """
-    Retrieve the user's complete inventory and preferences.
-    """
+    """Retrieve the user's complete inventory and preferences."""
 
     result = await get_items_controller(user_id, db)
-
-    # IMPORTANT:
-    # Keep ingredient IDs, quantities and units.
-    # Do not reduce this to a list of names.
     items = result["items"]
 
     allergies = (
@@ -54,9 +106,9 @@ async def _get_user_context(user_id: int, db):
     return items, allergies, cuisine, diet, gluten_free
 
 
-# ==========================================
+# ============================================================
 # 2. SAVE GENERATED RECIPE
-# ==========================================
+# ============================================================
 
 async def _save_recipe(
     db,
@@ -65,7 +117,6 @@ async def _save_recipe(
     source: str = "ai",
     request: str | None = None,
 ) -> dict:
-
     row = await db.fetchrow(
         """
         INSERT INTO recipes (
@@ -83,23 +134,19 @@ async def _save_recipe(
         json.dumps(content),
     )
 
+    if row is None:
+        raise RuntimeError("Recipe was not returned after saving.")
+
     saved_recipe = dict(row)
-
-    # Return structured JSON rather than a JSON string.
-    saved_recipe["content"] = json.loads(
-        saved_recipe["content"]
-    )
-
+    saved_recipe["content"] = _decode_json_value(saved_recipe["content"])
     return saved_recipe
 
 
-# ==========================================
+# ============================================================
 # 3. GENERATE RECIPES FROM FRIDGE
-# ==========================================
-
+# ============================================================
 
 async def generate_ai_recipe(user_id: int, db):
-
     try:
         (
             items,
@@ -123,21 +170,26 @@ async def generate_ai_recipe(user_id: int, db):
             gluten_free,
         )
 
-        recipes = result["recipes"]
+        recipes = result.get("recipes")
+
+        if not isinstance(recipes, list) or not recipes:
+            raise HTTPException(
+                status_code=502,
+                detail="The AI did not return any recipes.",
+            )
 
         saved_recipes = []
 
-        # Save all recipes in one transaction.
+        # All recipes from one generation request are saved atomically.
         async with db.transaction():
-
             for recipe in recipes:
                 saved = await _save_recipe(
                     db=db,
                     user_id=user_id,
                     content=recipe,
                     source="ai",
+                    request=None,
                 )
-
                 saved_recipes.append(saved)
 
         return {
@@ -147,27 +199,30 @@ async def generate_ai_recipe(user_id: int, db):
 
     except HTTPException:
         raise
-
     except Exception as error:
-        print("RECIPE GENERATION ERROR:", str(error))
-
+        print("RECIPE GENERATION ERROR:", repr(error))
         raise HTTPException(
             status_code=500,
             detail="Could not generate recipes. Please try again.",
         )
 
 
-# ==========================================
+# ============================================================
 # 4. GENERATE RECIPE FROM SEARCH
-# ==========================================
+# ============================================================
 
 async def generate_search_recipe(
     user_id: int,
     request: str,
     db,
 ):
-
     try:
+        if not request or not request.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Please provide a recipe search request.",
+            )
+
         (
             items,
             allergies,
@@ -183,7 +238,7 @@ async def generate_search_recipe(
             )
 
         result = await generate_search_recipe_ai(
-            request,
+            request.strip(),
             items,
             allergies,
             cuisine,
@@ -191,13 +246,21 @@ async def generate_search_recipe(
             gluten_free,
         )
 
-        saved = await _save_recipe(
-            db=db,
-            user_id=user_id,
-            content=result["recipe"],
-            source="search",
-            request=request,
-        )
+        recipe_content = result.get("recipe")
+        if not isinstance(recipe_content, dict):
+            raise HTTPException(
+                status_code=502,
+                detail="The AI did not return a valid recipe.",
+            )
+
+        async with db.transaction():
+            saved = await _save_recipe(
+                db=db,
+                user_id=user_id,
+                content=recipe_content,
+                source="search",
+                request=request.strip(),
+            )
 
         return {
             "message": "Recipe generated successfully.",
@@ -206,25 +269,30 @@ async def generate_search_recipe(
 
     except HTTPException:
         raise
-
     except Exception as error:
-        print("SEARCH RECIPE ERROR:", str(error))
-
+        print("SEARCH RECIPE ERROR:", repr(error))
         raise HTTPException(
             status_code=500,
             detail="Could not generate the requested recipe.",
         )
 
 
-# ==========================================
+# ============================================================
 # 5. GENERATE INGREDIENT EXPIRATION DATE
-# ==========================================
+# ============================================================
 
 async def generate_info(
     user_id: int,
     ingredient_id: int,
     db,
 ):
+    """
+    Estimate a storage duration and store the resulting calendar date.
+
+    The database currently has a legacy column spelling:
+    items.experation_date. The API inventory response aliases it
+    to the correctly spelled expiration_date.
+    """
 
     name = await db.fetchval(
         """
@@ -245,20 +313,27 @@ async def generate_info(
             detail="Ingredient not found.",
         )
 
-    expiration = await generate_expiration_date(name)
-
     try:
-        expiration = date.fromisoformat(expiration)
-    except (ValueError, TypeError):
+        duration_text = await generate_expiration_date(name)
+        expiration = _storage_life_to_date(duration_text)
+
+    except (ValueError, TypeError) as error:
+        print("EXPIRATION DATE PARSING ERROR:", repr(error))
+        raise HTTPException(
+            status_code=502,
+            detail="Could not interpret the estimated storage duration.",
+        )
+    except Exception as error:
+        print("EXPIRATION DATE ERROR:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="Could not interpret the generated expiration date.",
+            detail="Could not estimate the ingredient expiration date.",
         )
 
     await db.execute(
         """
         UPDATE items
-        SET expiration_date = $1
+        SET experation_date = $1
         WHERE ingredient_id = $2
           AND users_id = $3
         """,
@@ -267,64 +342,140 @@ async def generate_info(
         user_id,
     )
 
-    return {"expiration": expiration}
+    return {
+        "ingredient_id": ingredient_id,
+        "expiration_date": expiration.isoformat(),
+        "estimated_storage_life": duration_text,
+    }
 
 
-# ==========================================
-# 6. CONFIRM COOKING AND DEDUCT INGREDIENTS
-# ==========================================
+# ============================================================
+# 7. COOK RECIPE (REPEATABLE + IDEMPOTENT)
+# ============================================================
 
 async def cook_recipe_controller(
     user_id: int,
     recipe_id: int,
+    idempotency_key: UUID,
     db,
 ):
+    """
+    Record one deliberate cooking event and deduct its ingredients.
+
+    A new idempotency key means a new intentional cooking.
+    Reusing the same key safely replays the original result.
+    """
+
     try:
         async with db.transaction():
 
-            # 1. Lock the recipe to prevent simultaneous cooking requests.
+            # 1. Confirm ownership and lock the recipe.
             recipe = await db.fetchrow(
                 """
-                SELECT id, users_id, content, cooked_at
+                SELECT id, content
                 FROM recipes
-                WHERE id = $1 AND users_id = $2
+                WHERE id = $1
+                  AND users_id = $2
                 FOR UPDATE
                 """,
                 recipe_id,
                 user_id,
             )
 
-            if not recipe:
+            if recipe is None:
                 raise HTTPException(
                     status_code=404,
                     detail="Recipe not found.",
                 )
 
-            # 2. Prevent deducting ingredients twice.
-            if recipe["cooked_at"] is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="This recipe has already been cooked.",
+            # 2. Register this cooking action.
+            cooking = await db.fetchrow(
+                """
+                INSERT INTO recipe_cookings (
+                    recipe_id,
+                    users_id,
+                    idempotency_key
+                )
+                VALUES ($1, $2, $3)
+                ON CONFLICT (users_id, idempotency_key)
+                DO NOTHING
+                RETURNING id
+                """,
+                recipe_id,
+                user_id,
+                idempotency_key,
+            )
+
+            # 3. If this key already exists, return its original result.
+            if cooking is None:
+                existing = await db.fetchrow(
+                    """
+                    SELECT
+                        id,
+                        recipe_id,
+                        cooked_at,
+                        deducted_ingredients
+                    FROM recipe_cookings
+                    WHERE users_id = $1
+                      AND idempotency_key = $2
+                    """,
+                    user_id,
+                    idempotency_key,
                 )
 
-            # 3. Read the saved recipe.
-            content = recipe["content"]
+                if existing is None:
+                    raise RuntimeError(
+                        "Could not retrieve the existing cooking event."
+                    )
 
-            if isinstance(content, str):
-                content = json.loads(content)
+                if existing["recipe_id"] != recipe_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "This idempotency key has already been "
+                            "used for another recipe."
+                        ),
+                    )
+
+                return {
+                    "message": "This cooking action was already processed.",
+                    "recipe_id": recipe_id,
+                    "cooking_id": existing["id"],
+                    "cooked_at": existing["cooked_at"],
+                    "deducted_ingredients": _decode_json_value(
+                        existing["deducted_ingredients"]
+                    ),
+                    "replayed": True,
+                }
+
+            cooking_id = cooking["id"]
+
+            # 4. Parse the recipe content.
+            content = _decode_json_value(recipe["content"])
+
+            if not isinstance(content, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid recipe content.",
+                )
 
             ingredients = content.get("ingredients", [])
 
-            if not ingredients:
+            if not isinstance(ingredients, list) or not ingredients:
                 raise HTTPException(
                     status_code=400,
                     detail="This recipe has no ingredients.",
                 )
 
-            # 4. Validate and aggregate ingredient quantities.
+            # 5. Validate and aggregate ingredient requirements.
             required = {}
 
             for ingredient in ingredients:
+                if not isinstance(ingredient, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid recipe ingredient.",
+                    )
 
                 if ingredient.get("is_available") is False:
                     raise HTTPException(
@@ -335,24 +486,24 @@ async def cook_recipe_controller(
                         ),
                     )
 
-                ingredient_id = ingredient.get("ingredient_id")
+                raw_id = ingredient.get("ingredient_id")
+                raw_quantity = ingredient.get("quantity")
+                unit = ingredient.get("unit")
 
-                if ingredient_id is None:
+                if raw_id is None or isinstance(raw_id, bool):
                     raise HTTPException(
                         status_code=400,
-                        detail="Recipe contains an ingredient without an ID.",
+                        detail="Recipe contains an ingredient without a valid ID.",
                     )
 
                 try:
-                    ingredient_id = int(ingredient_id)
-                    quantity = Decimal(str(ingredient["quantity"]))
-                except (ValueError, TypeError, KeyError, InvalidOperation):
+                    ingredient_id = int(raw_id)
+                    quantity = Decimal(str(raw_quantity))
+                except (ValueError, TypeError, InvalidOperation):
                     raise HTTPException(
                         status_code=400,
                         detail="Recipe contains invalid ingredient data.",
                     )
-
-                unit = ingredient.get("unit")
 
                 if (
                     ingredient_id <= 0
@@ -366,27 +517,30 @@ async def cook_recipe_controller(
                         detail="Recipe contains invalid ingredient data.",
                     )
 
+                ingredient_name = ingredient.get("name") or "Ingredient"
+
                 if ingredient_id not in required:
                     required[ingredient_id] = {
                         "quantity": quantity,
                         "unit": unit,
-                        "name": ingredient.get("name", "Ingredient"),
+                        "name": ingredient_name,
                     }
-
                 else:
-                    existing = required[ingredient_id]
+                    previous = required[ingredient_id]
 
-                    if existing["unit"] != unit:
+                    if previous["unit"] != unit:
                         raise HTTPException(
                             status_code=400,
-                            detail="An ingredient has inconsistent units.",
+                            detail=(
+                                f"Inconsistent units for {ingredient_name}."
+                            ),
                         )
 
-                    existing["quantity"] += quantity
+                    previous["quantity"] += quantity
 
             ingredient_ids = sorted(required.keys())
 
-            # 5. Lock the user's inventory rows.
+            # 6. Lock the user's inventory rows in a consistent order.
             inventory = await db.fetch(
                 """
                 SELECT
@@ -409,15 +563,16 @@ async def cook_recipe_controller(
                 for item in inventory
             }
 
-            # 6. Check ALL ingredients before making any changes.
+            # 7. Validate every ingredient before making any deduction.
             for ingredient_id, needed in required.items():
-
                 stock = inventory_by_id.get(ingredient_id)
 
-                if not stock:
+                if stock is None:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"{needed['name']} is no longer in your fridge.",
+                        detail=(
+                            f"{needed['name']} is no longer in your fridge."
+                        ),
                     )
 
                 if stock["unit"] != needed["unit"]:
@@ -442,13 +597,11 @@ async def cook_recipe_controller(
                         ),
                     )
 
-            # 7. Deduct ingredients only after every check passes.
+            # 8. Deduct ingredients.
             deducted = []
 
             for ingredient_id, needed in required.items():
-
                 stock = inventory_by_id[ingredient_id]
-
                 available = Decimal(str(stock["quantity"]))
                 remaining = available - needed["quantity"]
 
@@ -456,7 +609,8 @@ async def cook_recipe_controller(
                     await db.execute(
                         """
                         DELETE FROM items
-                        WHERE id = $1 AND users_id = $2
+                        WHERE id = $1
+                          AND users_id = $2
                         """,
                         stock["id"],
                         user_id,
@@ -466,7 +620,8 @@ async def cook_recipe_controller(
                         """
                         UPDATE items
                         SET quantity = $1
-                        WHERE id = $2 AND users_id = $3
+                        WHERE id = $2
+                          AND users_id = $3
                         """,
                         remaining,
                         stock["id"],
@@ -481,64 +636,88 @@ async def cook_recipe_controller(
                     "remaining": float(remaining),
                 })
 
-            # 8. Mark the recipe as cooked.
-            cooked_recipe = await db.fetchrow(
+            # 9. Store the deductions in the cooking event.
+            cooking_result = await db.fetchrow(
                 """
-                UPDATE recipes
-                SET cooked_at = NOW()
-                WHERE id = $1
-                  AND users_id = $2
-                  AND cooked_at IS NULL
+                UPDATE recipe_cookings
+                SET deducted_ingredients = $1::jsonb
+                WHERE id = $2
                 RETURNING cooked_at
                 """,
+                json.dumps(deducted),
+                cooking_id,
+            )
+
+            if cooking_result is None:
+                raise RuntimeError("Could not complete the cooking event.")
+
+            # Keep recipes.cooked_at as the most recent cooking timestamp.
+            await db.execute(
+                """
+                UPDATE recipes
+                SET cooked_at = $1
+                WHERE id = $2
+                  AND users_id = $3
+                """,
+                cooking_result["cooked_at"],
                 recipe_id,
                 user_id,
             )
 
-            if not cooked_recipe:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Could not confirm cooking.",
-                )
-
-        # Transaction committed successfully.
+        # The transaction has committed at this point.
         return {
             "message": "Recipe cooked successfully!",
             "recipe_id": recipe_id,
-            "cooked_at": cooked_recipe["cooked_at"],
+            "cooking_id": cooking_id,
+            "cooked_at": cooking_result["cooked_at"],
             "deducted_ingredients": deducted,
+            "replayed": False,
         }
 
     except HTTPException:
         raise
-
     except Exception as error:
-        print("COOKING CONFIRMATION ERROR:", str(error))
-
+        print("COOKING CONFIRMATION ERROR:", repr(error))
         raise HTTPException(
             status_code=500,
-            detail="Could not confirm cooking. No inventory changes were saved.",
+            detail=(
+                "Could not confirm cooking. "
+                "No inventory changes were saved."
+            ),
         )
 
-# ==========================================
-# 7. RETRIEVE USER'S GENERATED RECIPES
-# ==========================================
+
+# ============================================================
+# 8. RETRIEVE USER'S RECIPES
+# ============================================================
 
 async def get_user_recipes_controller(user_id: int, db):
-
     try:
         rows = await db.fetch(
             """
             SELECT
-                id,
-                source,
-                request,
-                content,
-                created_at,
-                cooked_at
-            FROM recipes
-            WHERE users_id = $1
-            ORDER BY created_at DESC, id DESC
+                r.id,
+                r.source,
+                r.request,
+                r.content,
+                r.created_at,
+                r.cooked_at,
+                COALESCE(h.cooking_count, 0)::INTEGER AS cooking_count,
+                COALESCE(h.last_cooked_at, r.cooked_at) AS last_cooked_at
+            FROM recipes r
+            LEFT JOIN (
+                SELECT
+                    recipe_id,
+                    users_id,
+                    COUNT(*) AS cooking_count,
+                    MAX(cooked_at) AS last_cooked_at
+                FROM recipe_cookings
+                GROUP BY recipe_id, users_id
+            ) h
+                ON h.recipe_id = r.id
+               AND h.users_id = r.users_id
+            WHERE r.users_id = $1
+            ORDER BY r.created_at DESC, r.id DESC
             """,
             user_id,
         )
@@ -547,19 +726,82 @@ async def get_user_recipes_controller(user_id: int, db):
 
         for row in rows:
             recipe = dict(row)
-
-            # Convert JSON stored as TEXT into a Python dictionary.
-            if isinstance(recipe["content"], str):
-                recipe["content"] = json.loads(recipe["content"])
-
+            recipe["content"] = _decode_json_value(recipe["content"])
             recipes.append(recipe)
 
         return {"recipes": recipes}
 
     except Exception as error:
-        print("GET USER RECIPES ERROR:", str(error))
-
+        print("GET USER RECIPES ERROR:", repr(error))
         raise HTTPException(
             status_code=500,
             detail="Could not retrieve your recipes.",
+        )
+
+
+# ============================================================
+# 9. RETRIEVE A RECIPE'S COOKING HISTORY
+# ============================================================
+
+async def get_recipe_cookings_controller(
+    user_id: int,
+    recipe_id: int,
+    db,
+):
+    try:
+        recipe = await db.fetchrow(
+            """
+            SELECT id
+            FROM recipes
+            WHERE id = $1
+              AND users_id = $2
+            """,
+            recipe_id,
+            user_id,
+        )
+
+        if recipe is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Recipe not found.",
+            )
+
+        rows = await db.fetch(
+            """
+            SELECT
+                id,
+                cooked_at,
+                deducted_ingredients,
+                is_legacy
+            FROM recipe_cookings
+            WHERE recipe_id = $1
+              AND users_id = $2
+            ORDER BY cooked_at DESC, id DESC
+            """,
+            recipe_id,
+            user_id,
+        )
+
+        cookings = []
+
+        for row in rows:
+            cooking = dict(row)
+            cooking["deducted_ingredients"] = _decode_json_value(
+                cooking["deducted_ingredients"]
+            )
+            cookings.append(cooking)
+
+        return {
+            "recipe_id": recipe_id,
+            "total_cookings": len(cookings),
+            "cookings": cookings,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("GET RECIPE COOKINGS ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not retrieve cooking history.",
         )
