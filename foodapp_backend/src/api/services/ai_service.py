@@ -6,6 +6,169 @@ from src.core.ai_client import client
 
 MODEL = "openai/gpt-oss-120b"
 
+# Schema for recipes generated using fridge ingredients
+RECIPES_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "recipes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "cooking_time": {"type": "integer"},
+                    "difficulty": {"type": "string"},
+                    "servings": {"type": "integer"},
+                    "image_url": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "null"}
+                        ]
+                    },
+                    "ingredients": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ingredient_id": {"type": "integer"},
+                                "name": {"type": "string"},
+                                "quantity": {"type": "number"},
+                                "unit": {"type": "string"}
+                            },
+                            "required": [
+                                "ingredient_id",
+                                "name",
+                                "quantity",
+                                "unit"
+                            ],
+                            "additionalProperties": False
+                        }
+                    },
+                    "instructions": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "nutrition": {
+                        "type": "object",
+                        "properties": {
+                            "calories": {"type": "number"},
+                            "protein": {"type": "number"},
+                            "carbs": {"type": "number"},
+                            "fat": {"type": "number"}
+                        },
+                        "required": [
+                            "calories",
+                            "protein",
+                            "carbs",
+                            "fat"
+                        ],
+                        "additionalProperties": False
+                    }
+                },
+                "required": [
+                    "title",
+                    "description",
+                    "cooking_time",
+                    "difficulty",
+                    "servings",
+                    "image_url",
+                    "ingredients",
+                    "instructions",
+                    "nutrition"
+                ],
+                "additionalProperties": False
+            }
+        }
+    },
+    "required": ["recipes"],
+    "additionalProperties": False
+}
+
+
+# Schema for recipes generated from a search request
+SEARCH_RECIPE_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "recipe": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "cooking_time": {"type": "integer"},
+                "difficulty": {"type": "string"},
+                "servings": {"type": "integer"},
+                "image_url": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"}
+                    ]
+                },
+                "ingredients": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ingredient_id": {
+                                "anyOf": [
+                                    {"type": "integer"},
+                                    {"type": "null"}
+                                ]
+                            },
+                            "name": {"type": "string"},
+                            "quantity": {"type": "number"},
+                            "unit": {"type": "string"},
+                            "is_available": {"type": "boolean"}
+                        },
+                        "required": [
+                            "ingredient_id",
+                            "name",
+                            "quantity",
+                            "unit",
+                            "is_available"
+                        ],
+                        "additionalProperties": False
+                    }
+                },
+                "instructions": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "nutrition": {
+                    "type": "object",
+                    "properties": {
+                        "calories": {"type": "number"},
+                        "protein": {"type": "number"},
+                        "carbs": {"type": "number"},
+                        "fat": {"type": "number"}
+                    },
+                    "required": [
+                        "calories",
+                        "protein",
+                        "carbs",
+                        "fat"
+                    ],
+                    "additionalProperties": False
+                }
+            },
+            "required": [
+                "title",
+                "description",
+                "cooking_time",
+                "difficulty",
+                "servings",
+                "image_url",
+                "ingredients",
+                "instructions",
+                "nutrition"
+            ],
+            "additionalProperties": False
+        }
+    },
+    "required": ["recipe"],
+    "additionalProperties": False
+}
+
 
 def _prepare_inventory(items: list[dict]) -> list[dict]:
     """Prepare inventory data for the AI prompt."""
@@ -23,8 +186,13 @@ def _prepare_inventory(items: list[dict]) -> list[dict]:
     return inventory
 
 
-def _call_ai_json(prompt: str) -> dict:
-    """Call the AI and parse its response as JSON."""
+
+def _call_ai_json(
+    prompt: str,
+    schema_name: str,
+    schema: dict,
+) -> dict:
+    """Generate a response using Groq Strict Structured Outputs."""
 
     response = client.chat.completions.create(
         model=MODEL,
@@ -33,8 +201,8 @@ def _call_ai_json(prompt: str) -> dict:
                 "role": "system",
                 "content": (
                     "You are a professional cooking assistant. "
-                    "Return ONLY valid JSON. "
-                    "Do not include Markdown, explanations, or code fences."
+                    "Generate accurate, realistic recipes. "
+                    "Follow the requested JSON structure exactly."
                 ),
             },
             {
@@ -42,6 +210,14 @@ def _call_ai_json(prompt: str) -> dict:
                 "content": prompt,
             },
         ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+        },
     )
 
     content = response.choices[0].message.content
@@ -49,19 +225,18 @@ def _call_ai_json(prompt: str) -> dict:
     if not content:
         raise ValueError("The AI returned an empty response.")
 
-    content = content.strip()
-
-    # Handle accidental Markdown code fences.
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1]
-        content = content.rsplit("```", 1)[0].strip()
-
     try:
-        return json.loads(content)
+        result = json.loads(content)
     except json.JSONDecodeError as error:
         raise ValueError(
             f"The AI returned invalid JSON: {error}"
         ) from error
+
+    if not isinstance(result, dict):
+        raise ValueError("The AI response must be a JSON object.")
+
+    return result
+
 
 
 def _validate_inventory_ingredients(
@@ -206,7 +381,11 @@ RETURN ONLY JSON IN THIS FORMAT:
 }}
 """
 
-    result = _call_ai_json(prompt)
+    result = _call_ai_json(
+    prompt,
+    "fridge_recipes",
+    RECIPES_RESPONSE_SCHEMA,
+)
 
     recipes = result.get("recipes")
 
@@ -331,7 +510,11 @@ RETURN ONLY JSON IN THIS FORMAT:
 }}
 """
 
-    result = _call_ai_json(prompt)
+    result = _call_ai_json(
+    prompt,
+    "searched_recipe",
+    SEARCH_RECIPE_RESPONSE_SCHEMA,
+)
 
     recipe = result.get("recipe")
 
