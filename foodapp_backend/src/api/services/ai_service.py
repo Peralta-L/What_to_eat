@@ -4,7 +4,7 @@ import math
 from src.core.ai_client import client
 
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 
 def _prepare_inventory(items: list[dict]) -> list[dict]:
