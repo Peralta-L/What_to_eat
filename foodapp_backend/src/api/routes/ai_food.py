@@ -5,6 +5,7 @@ from src.api.controllers.ai_controller import (
     generate_info,
     generate_search_recipe,
     cook_recipe_controller,
+    get_user_recipes_controller,
 )
 from src.core.database import get_db
 
@@ -21,6 +22,13 @@ async def get_expiration_date(user_id: int = Depends(get_current_user), ingredie
 @router.get("/search-recipes")
 async def search_recipes(user_id: int = Depends(get_current_user), request: str = ..., db=Depends(get_db)):
     return await generate_search_recipe(user_id, request, db)
+
+@router.get("/recipes")
+async def get_user_recipes(
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await get_user_recipes_controller(user_id, db)
 
 @router.post("/recipes/{recipe_id}/cooked")
 async def confirm_cooked_recipe(

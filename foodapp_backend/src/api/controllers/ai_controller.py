@@ -519,3 +519,47 @@ async def cook_recipe_controller(
             status_code=500,
             detail="Could not confirm cooking. No inventory changes were saved.",
         )
+
+# ==========================================
+# 7. RETRIEVE USER'S GENERATED RECIPES
+# ==========================================
+
+async def get_user_recipes_controller(user_id: int, db):
+
+    try:
+        rows = await db.fetch(
+            """
+            SELECT
+                id,
+                source,
+                request,
+                content,
+                created_at,
+                cooked_at
+            FROM recipes
+            WHERE users_id = $1
+            ORDER BY created_at DESC, id DESC
+            """,
+            user_id,
+        )
+
+        recipes = []
+
+        for row in rows:
+            recipe = dict(row)
+
+            # Convert JSON stored as TEXT into a Python dictionary.
+            if isinstance(recipe["content"], str):
+                recipe["content"] = json.loads(recipe["content"])
+
+            recipes.append(recipe)
+
+        return {"recipes": recipes}
+
+    except Exception as error:
+        print("GET USER RECIPES ERROR:", str(error))
+
+        raise HTTPException(
+            status_code=500,
+            detail="Could not retrieve your recipes.",
+        )
