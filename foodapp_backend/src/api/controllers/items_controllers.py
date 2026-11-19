@@ -29,7 +29,7 @@ async def get_items_controller(users_id: int, db=Depends(get_db)):
             items.quantity,
             items.unit,
             items.storage_location,
-            items.experation_date AS expiration_date,
+            items.expiration_date,
             global_ingredients.name,
             global_ingredients.category,
             global_ingredients.calories,
