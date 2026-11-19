@@ -2,10 +2,15 @@ from fastapi import APIRouter, Depends, Query
 
 from src.core.database import get_db
 from src.utils.auth_util import get_current_user
-from src.schemas.recipe_schema import CookRecipeRequest
+from src.schemas.recipe_schema import (
+    CookRecipeRequest,
+    GenerateRecipesRequest,
+    GenerateSelectedRecipesRequest,
+)
 
 from src.api.controllers.ai_controller import (
     generate_ai_recipe,
+    generate_selected_recipes,
     generate_info,
     generate_search_recipe,
     cook_recipe_controller,
@@ -21,12 +26,31 @@ from src.api.controllers.ai_controller import (
 router = APIRouter()
 
 
-@router.get("/generate-recipe")
+@router.post("/generate-recipe")
 async def generate_recipe(
+    payload: GenerateRecipesRequest,
     user_id: int = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    return await generate_ai_recipe(user_id, db)
+    return await generate_ai_recipe(
+        user_id,
+        payload.idempotency_key,
+        db,
+    )
+
+
+@router.post("/generate-selected-recipes")
+async def generate_selected_recipe_batch(
+    payload: GenerateSelectedRecipesRequest,
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await generate_selected_recipes(
+        user_id,
+        payload.ingredient_ids,
+        payload.idempotency_key,
+        db,
+    )
 
 
 @router.get("/search-recipes")

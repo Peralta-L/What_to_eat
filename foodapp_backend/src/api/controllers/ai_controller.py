@@ -143,25 +143,189 @@ async def _save_recipe(
 
 
 # ============================================================
-# 3. GENERATE RECIPES FROM FRIDGE
+# 3. GENERATION REQUEST IDEMPOTENCY + SHARED GENERATION
 # ============================================================
 
-async def generate_ai_recipe(user_id: int, db):
-    try:
-        (
-            items,
-            allergies,
-            cuisine,
-            diet,
-            gluten_free,
-        ) = await _get_user_context(user_id, db)
+async def _claim_generation_request(
+    user_id: int,
+    idempotency_key: UUID,
+    generation_type: str,
+    db,
+):
+    """Claim one generation request or return its previously saved result.
 
-        if not items:
+    Concurrent duplicate requests with the same key cannot create a second
+    recipe batch. A stale processing claim can be recovered after 15 minutes.
+    """
+    async with db.transaction():
+        inserted = await db.fetchrow(
+            """
+            INSERT INTO recipe_generation_requests (
+                users_id,
+                idempotency_key,
+                generation_type,
+                status,
+                started_at
+            )
+            VALUES ($1, $2, $3, 'processing', NOW())
+            ON CONFLICT (users_id, idempotency_key) DO NOTHING
+            RETURNING id
+            """,
+            user_id,
+            idempotency_key,
+            generation_type,
+        )
+
+        if inserted is not None:
+            return None
+
+        existing = await db.fetchrow(
+            """
+            SELECT generation_type, status, recipe_ids, started_at
+            FROM recipe_generation_requests
+            WHERE users_id = $1
+              AND idempotency_key = $2
+            FOR UPDATE
+            """,
+            user_id,
+            idempotency_key,
+        )
+
+        if existing is None:
+            raise RuntimeError("Could not retrieve the generation request.")
+
+        if existing["generation_type"] != generation_type:
             raise HTTPException(
-                status_code=400,
-                detail="Your fridge is empty. Add ingredients first.",
+                status_code=409,
+                detail="This generation key was already used for a different action.",
             )
 
+        if existing["status"] == "completed":
+            recipe_ids = list(existing["recipe_ids"] or [])
+            if not recipe_ids:
+                return {
+                    "message": "This generation request was already processed.",
+                    "recipes": [],
+                    "replayed": True,
+                }
+
+            rows = await db.fetch(
+                """
+                SELECT
+                    r.id,
+                    r.users_id,
+                    r.source,
+                    r.request,
+                    r.content,
+                    r.created_at,
+                    r.cooked_at,
+                    COALESCE(ch.cooking_count, 0)::INTEGER AS cooking_count,
+                    COALESCE(ch.last_cooked_at, r.cooked_at) AS last_cooked_at,
+                    EXISTS (
+                        SELECT 1
+                        FROM recipe_favourites f
+                        WHERE f.users_id = r.users_id
+                          AND f.recipe_id = r.id
+                    ) AS is_favourite
+                FROM recipes r
+                LEFT JOIN (
+                    SELECT recipe_id, users_id,
+                           COUNT(*) AS cooking_count,
+                           MAX(cooked_at) AS last_cooked_at
+                    FROM recipe_cookings
+                    GROUP BY recipe_id, users_id
+                ) ch
+                  ON ch.recipe_id = r.id
+                 AND ch.users_id = r.users_id
+                WHERE r.users_id = $1
+                  AND r.id = ANY($2::INTEGER[])
+                ORDER BY array_position($2::INTEGER[], r.id)
+                """,
+                user_id,
+                recipe_ids,
+            )
+
+            recipes = []
+            for row in rows:
+                recipe = dict(row)
+                recipe["content"] = _decode_json_value(recipe["content"])
+                recipes.append(recipe)
+
+            return {
+                "message": "This generation request was already processed.",
+                "recipes": recipes,
+                "replayed": True,
+            }
+
+        # Recover a request left in 'processing' after a worker crash.
+        reclaimed = await db.fetchrow(
+            """
+            UPDATE recipe_generation_requests
+            SET started_at = NOW()
+            WHERE users_id = $1
+              AND idempotency_key = $2
+              AND status = 'processing'
+              AND started_at < NOW() - INTERVAL '15 minutes'
+            RETURNING id
+            """,
+            user_id,
+            idempotency_key,
+        )
+
+        if reclaimed is not None:
+            return None
+
+        raise HTTPException(
+            status_code=409,
+            detail="This recipe generation is already in progress. Please wait and retry with the same request.",
+        )
+
+
+async def _release_failed_generation_request(
+    user_id: int,
+    idempotency_key: UUID,
+    db,
+):
+    """Remove a failed claim so the same client request can safely retry."""
+    try:
+        await db.execute(
+            """
+            DELETE FROM recipe_generation_requests
+            WHERE users_id = $1
+              AND idempotency_key = $2
+              AND status = 'processing'
+            """,
+            user_id,
+            idempotency_key,
+        )
+    except Exception as cleanup_error:
+        print("GENERATION CLAIM CLEANUP ERROR:", repr(cleanup_error))
+
+
+async def _generate_and_save_recipe_batch(
+    *,
+    user_id: int,
+    items: list[dict],
+    allergies: list[str],
+    cuisine: list[str],
+    diet: list[str],
+    gluten_free: bool,
+    source: str,
+    generation_type: str,
+    idempotency_key: UUID,
+    db,
+):
+    """Generate and atomically save at most five recipes."""
+    replay = await _claim_generation_request(
+        user_id,
+        idempotency_key,
+        generation_type,
+        db,
+    )
+    if replay is not None:
+        return replay
+
+    try:
         result = await generate_recipe_from_items(
             items,
             allergies,
@@ -170,40 +334,191 @@ async def generate_ai_recipe(user_id: int, db):
             gluten_free,
         )
 
-        recipes = result.get("recipes")
-
+        recipes = result.get("recipes") if isinstance(result, dict) else None
         if not isinstance(recipes, list) or not recipes:
             raise HTTPException(
                 status_code=502,
                 detail="The AI did not return any recipes.",
             )
 
+        # Hard server-side cap: one generation action stores no more than five.
+        recipes = recipes[:5]
         saved_recipes = []
 
-        # All recipes from one generation request are saved atomically.
         async with db.transaction():
             for recipe in recipes:
+                if not isinstance(recipe, dict):
+                    raise HTTPException(
+                        status_code=502,
+                        detail="The AI returned an invalid recipe.",
+                    )
+
                 saved = await _save_recipe(
                     db=db,
                     user_id=user_id,
                     content=recipe,
-                    source="ai",
+                    source=source,
                     request=None,
                 )
                 saved_recipes.append(saved)
 
+            recipe_ids = [int(recipe["id"]) for recipe in saved_recipes]
+            await db.execute(
+                """
+                UPDATE recipe_generation_requests
+                SET status = 'completed',
+                    recipe_ids = $3::INTEGER[],
+                    completed_at = NOW()
+                WHERE users_id = $1
+                  AND idempotency_key = $2
+                """,
+                user_id,
+                idempotency_key,
+                recipe_ids,
+            )
+
         return {
             "message": "Recipes generated successfully.",
             "recipes": saved_recipes,
+            "replayed": False,
         }
 
     except HTTPException:
+        await _release_failed_generation_request(user_id, idempotency_key, db)
         raise
     except Exception as error:
+        await _release_failed_generation_request(user_id, idempotency_key, db)
         print("RECIPE GENERATION ERROR:", repr(error))
         raise HTTPException(
             status_code=500,
             detail="Could not generate recipes. Please try again.",
+        )
+
+
+# ============================================================
+# 4. GENERATE RECIPES FROM THE FULL FRIDGE
+# ============================================================
+
+async def generate_ai_recipe(
+    user_id: int,
+    idempotency_key: UUID,
+    db,
+):
+    try:
+        items, allergies, cuisine, diet, gluten_free = await _get_user_context(
+            user_id, db
+        )
+
+        if not items:
+            raise HTTPException(
+                status_code=400,
+                detail="Your fridge is empty. Add ingredients first.",
+            )
+
+        return await _generate_and_save_recipe_batch(
+            user_id=user_id,
+            items=items,
+            allergies=allergies,
+            cuisine=cuisine,
+            diet=diet,
+            gluten_free=gluten_free,
+            source="ai",
+            generation_type="fridge",
+            idempotency_key=idempotency_key,
+            db=db,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("FRIDGE RECIPE GENERATION ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not generate recipes. Please try again.",
+        )
+
+
+# ============================================================
+# 5. GENERATE RECIPES FROM ONLY USER-SELECTED INGREDIENTS
+# ============================================================
+
+async def generate_selected_recipes(
+    user_id: int,
+    ingredient_ids: list[int],
+    idempotency_key: UUID,
+    db,
+):
+    try:
+        if not ingredient_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Select at least one ingredient.",
+            )
+
+        if len(ingredient_ids) > 30:
+            raise HTTPException(
+                status_code=400,
+                detail="Select no more than 30 ingredients at a time.",
+            )
+
+        if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in ingredient_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="Selected ingredient IDs must be positive integers.",
+            )
+
+        if len(set(ingredient_ids)) != len(ingredient_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="The selected ingredients contain duplicates.",
+            )
+
+        items, allergies, cuisine, diet, gluten_free = await _get_user_context(
+            user_id, db
+        )
+
+        inventory_by_id = {
+            int(item["ingredient_id"]): item
+            for item in items
+        }
+        selected_ids = set(ingredient_ids)
+        unavailable_ids = selected_ids.difference(inventory_by_id.keys())
+
+        if unavailable_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Some selected ingredients are no longer in your fridge. "
+                    "Refresh your inventory and try again."
+                ),
+            )
+
+        # IMPORTANT: Only these selected inventory rows reach the AI service.
+        selected_items = [
+            inventory_by_id[ingredient_id]
+            for ingredient_id in ingredient_ids
+        ]
+
+        return await _generate_and_save_recipe_batch(
+            user_id=user_id,
+            items=selected_items,
+            allergies=allergies,
+            cuisine=cuisine,
+            diet=diet,
+            gluten_free=gluten_free,
+            source="selected",
+            generation_type="selected",
+            idempotency_key=idempotency_key,
+            db=db,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("SELECTED RECIPE GENERATION ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not generate recipes from the selected ingredients.",
         )
 
 
