@@ -11,6 +11,11 @@ from src.api.controllers.ai_controller import (
     cook_recipe_controller,
     get_user_recipes_controller,
     get_recipe_cookings_controller,
+    record_recipe_view_controller,
+    get_recipe_view_history_controller,
+    get_user_favourites_controller,
+    add_recipe_favourite_controller,
+    remove_recipe_favourite_controller,
 )
 
 router = APIRouter()
@@ -39,6 +44,49 @@ async def get_user_recipes(
     db=Depends(get_db),
 ):
     return await get_user_recipes_controller(user_id, db)
+
+
+@router.get("/recipes/history")
+async def get_recipe_view_history(
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await get_recipe_view_history_controller(user_id, db)
+
+
+@router.post("/recipes/{recipe_id}/viewed")
+async def record_recipe_view(
+    recipe_id: int,
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await record_recipe_view_controller(user_id, recipe_id, db)
+
+
+@router.get("/recipes/favourites")
+async def get_user_favourites(
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await get_user_favourites_controller(user_id, db)
+
+
+@router.post("/recipes/{recipe_id}/favourite")
+async def add_recipe_favourite(
+    recipe_id: int,
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await add_recipe_favourite_controller(user_id, recipe_id, db)
+
+
+@router.delete("/recipes/{recipe_id}/favourite")
+async def remove_recipe_favourite(
+    recipe_id: int,
+    user_id: int = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    return await remove_recipe_favourite_controller(user_id, recipe_id, db)
 
 
 @router.get("/recipes/{recipe_id}/cookings")

@@ -703,7 +703,13 @@ async def get_user_recipes_controller(user_id: int, db):
                 r.created_at,
                 r.cooked_at,
                 COALESCE(h.cooking_count, 0)::INTEGER AS cooking_count,
-                COALESCE(h.last_cooked_at, r.cooked_at) AS last_cooked_at
+                COALESCE(h.last_cooked_at, r.cooked_at) AS last_cooked_at,
+                EXISTS (
+                    SELECT 1
+                    FROM recipe_favourites f
+                    WHERE f.recipe_id = r.id
+                      AND f.users_id = r.users_id
+                ) AS is_favourite
             FROM recipes r
             LEFT JOIN (
                 SELECT
@@ -804,4 +810,273 @@ async def get_recipe_cookings_controller(
         raise HTTPException(
             status_code=500,
             detail="Could not retrieve cooking history.",
+        )
+
+# ============================================================
+# 10. RECORD A RECIPE VIEW (KEEP THE 10 MOST RECENT UNIQUE RECIPES)
+# ============================================================
+
+async def record_recipe_view_controller(user_id: int, recipe_id: int, db):
+    """Record that the user opened a recipe card; retain 10 unique recipes."""
+    try:
+        async with db.transaction():
+            # Serialize view-history writes per user so concurrent taps cannot
+            # leave more than ten rows behind.
+            await db.execute(
+                "SELECT pg_advisory_xact_lock(73111, $1::INTEGER)",
+                user_id,
+            )
+
+            recipe = await db.fetchrow(
+                """
+                SELECT id
+                FROM recipes
+                WHERE id = $1 AND users_id = $2
+                FOR KEY SHARE
+                """,
+                recipe_id,
+                user_id,
+            )
+
+            if recipe is None:
+                raise HTTPException(status_code=404, detail="Recipe not found.")
+
+            viewed = await db.fetchrow(
+                """
+                INSERT INTO recipe_view_history (users_id, recipe_id, viewed_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (users_id, recipe_id)
+                DO UPDATE SET viewed_at = NOW()
+                RETURNING viewed_at
+                """,
+                user_id,
+                recipe_id,
+            )
+
+            # Keep the ten most recently opened unique recipe cards.
+            await db.execute(
+                """
+                DELETE FROM recipe_view_history h
+                WHERE h.users_id = $1
+                  AND h.recipe_id NOT IN (
+                      SELECT recipe_id
+                      FROM recipe_view_history
+                      WHERE users_id = $1
+                      ORDER BY viewed_at DESC, id DESC
+                      LIMIT 10
+                  )
+                """,
+                user_id,
+            )
+
+        return {
+            "message": "Recipe view recorded.",
+            "recipe_id": recipe_id,
+            "viewed_at": viewed["viewed_at"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("RECORD RECIPE VIEW ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update your recipe history.",
+        )
+
+
+# ============================================================
+# 11. RETRIEVE THE USER'S LAST 10 VIEWED RECIPES
+# ============================================================
+
+async def get_recipe_view_history_controller(user_id: int, db):
+    try:
+        rows = await db.fetch(
+            """
+            SELECT
+                r.id,
+                r.source,
+                r.request,
+                r.content,
+                r.created_at,
+                r.cooked_at,
+                vh.viewed_at,
+                COALESCE(ch.cooking_count, 0)::INTEGER AS cooking_count,
+                COALESCE(ch.last_cooked_at, r.cooked_at) AS last_cooked_at,
+                EXISTS (
+                    SELECT 1
+                    FROM recipe_favourites f
+                    WHERE f.recipe_id = r.id
+                      AND f.users_id = r.users_id
+                ) AS is_favourite
+            FROM recipe_view_history vh
+            JOIN recipes r
+              ON r.id = vh.recipe_id
+             AND r.users_id = vh.users_id
+            LEFT JOIN (
+                SELECT recipe_id, users_id,
+                       COUNT(*) AS cooking_count,
+                       MAX(cooked_at) AS last_cooked_at
+                FROM recipe_cookings
+                GROUP BY recipe_id, users_id
+            ) ch
+              ON ch.recipe_id = r.id
+             AND ch.users_id = r.users_id
+            WHERE vh.users_id = $1
+            ORDER BY vh.viewed_at DESC, vh.id DESC
+            LIMIT 10
+            """,
+            user_id,
+        )
+
+        history = []
+        for row in rows:
+            recipe = dict(row)
+            recipe["content"] = _decode_json_value(recipe["content"])
+            history.append(recipe)
+
+        return {"history": history, "limit": 10}
+
+    except Exception as error:
+        print("GET RECIPE VIEW HISTORY ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not retrieve your recipe history.",
+        )
+
+
+# ============================================================
+# 12. RETRIEVE THE USER'S LOVED RECIPES
+# ============================================================
+
+async def get_user_favourites_controller(user_id: int, db):
+    try:
+        rows = await db.fetch(
+            """
+            SELECT
+                r.id,
+                r.source,
+                r.request,
+                r.content,
+                r.created_at,
+                r.cooked_at,
+                f.created_at AS favourited_at,
+                COALESCE(ch.cooking_count, 0)::INTEGER AS cooking_count,
+                COALESCE(ch.last_cooked_at, r.cooked_at) AS last_cooked_at,
+                TRUE AS is_favourite
+            FROM recipe_favourites f
+            JOIN recipes r
+              ON r.id = f.recipe_id
+             AND r.users_id = f.users_id
+            LEFT JOIN (
+                SELECT recipe_id, users_id,
+                       COUNT(*) AS cooking_count,
+                       MAX(cooked_at) AS last_cooked_at
+                FROM recipe_cookings
+                GROUP BY recipe_id, users_id
+            ) ch
+              ON ch.recipe_id = r.id
+             AND ch.users_id = r.users_id
+            WHERE f.users_id = $1
+            ORDER BY f.created_at DESC, f.recipe_id DESC
+            """,
+            user_id,
+        )
+
+        favourites = []
+        for row in rows:
+            recipe = dict(row)
+            recipe["content"] = _decode_json_value(recipe["content"])
+            favourites.append(recipe)
+
+        return {"favourites": favourites}
+
+    except Exception as error:
+        print("GET USER FAVOURITES ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not retrieve your loved recipes.",
+        )
+
+
+# ============================================================
+# 13. ADD A RECIPE TO LOVED ONES
+# ============================================================
+
+async def add_recipe_favourite_controller(user_id: int, recipe_id: int, db):
+    try:
+        async with db.transaction():
+            recipe = await db.fetchrow(
+                """
+                SELECT id
+                FROM recipes
+                WHERE id = $1 AND users_id = $2
+                FOR KEY SHARE
+                """,
+                recipe_id,
+                user_id,
+            )
+
+            if recipe is None:
+                raise HTTPException(status_code=404, detail="Recipe not found.")
+
+            await db.execute(
+                """
+                INSERT INTO recipe_favourites (users_id, recipe_id)
+                VALUES ($1, $2)
+                ON CONFLICT (users_id, recipe_id) DO NOTHING
+                """,
+                user_id,
+                recipe_id,
+            )
+
+        return {"recipe_id": recipe_id, "is_favourite": True}
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("ADD RECIPE FAVOURITE ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save this recipe.",
+        )
+
+
+# ============================================================
+# 14. REMOVE A RECIPE FROM LOVED ONES
+# ============================================================
+
+async def remove_recipe_favourite_controller(user_id: int, recipe_id: int, db):
+    try:
+        recipe = await db.fetchrow(
+            """
+            SELECT id
+            FROM recipes
+            WHERE id = $1 AND users_id = $2
+            """,
+            recipe_id,
+            user_id,
+        )
+
+        if recipe is None:
+            raise HTTPException(status_code=404, detail="Recipe not found.")
+
+        await db.execute(
+            """
+            DELETE FROM recipe_favourites
+            WHERE users_id = $1 AND recipe_id = $2
+            """,
+            user_id,
+            recipe_id,
+        )
+
+        return {"recipe_id": recipe_id, "is_favourite": False}
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("REMOVE RECIPE FAVOURITE ERROR:", repr(error))
+        raise HTTPException(
+            status_code=500,
+            detail="Could not remove this recipe from Loved ones.",
         )
