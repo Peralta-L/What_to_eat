@@ -1,18 +1,15 @@
-import calendar
 import json
-import re
-from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from fastapi import HTTPException
 
 from src.api.services.ai_service import (
-    generate_expiration_date,
     generate_recipe_from_items,
     generate_search_recipe as generate_search_recipe_ai,
 )
 from src.api.controllers.items_controllers import get_items_controller
+from src.api.services.expiration_service import estimate_expiration_date
 from src.api.controllers.preferences_controller import (
     get_allergies_controller,
     get_cuisine_controller,
@@ -30,51 +27,6 @@ def _decode_json_value(value):
     if isinstance(value, str):
         return json.loads(value)
     return value
-
-
-def _storage_life_to_date(duration_text: str, start_date: date | None = None) -> date:
-    """
-    Convert a duration such as '7 days', '2 weeks', or '3 months'
-    into a calendar date. The AI service is expected to return a
-    concise numeric duration, not a natural-language paragraph.
-    """
-    if not isinstance(duration_text, str):
-        raise ValueError("The AI did not return a storage duration.")
-
-    match = re.search(
-        r"\b(\d+)\s*(days?|weeks?|months?|years?)\b",
-        duration_text.strip().lower(),
-    )
-    if not match:
-        raise ValueError(
-            f"Unrecognized storage duration: {duration_text!r}"
-        )
-
-    amount = int(match.group(1))
-    unit = match.group(2)
-
-    if amount <= 0:
-        raise ValueError("Storage duration must be positive.")
-
-    base = start_date or date.today()
-
-    if unit.startswith("day"):
-        return base + timedelta(days=amount)
-
-    if unit.startswith("week"):
-        return base + timedelta(weeks=amount)
-
-    if unit.startswith("month"):
-        month_index = base.month - 1 + amount
-        year = base.year + month_index // 12
-        month = month_index % 12 + 1
-        day = min(base.day, calendar.monthrange(year, month)[1])
-        return date(year, month, day)
-
-    # Years: preserve month/day where possible (e.g. Feb 29 -> Feb 28).
-    year = base.year + amount
-    day = min(base.day, calendar.monthrange(year, base.month)[1])
-    return date(year, base.month, day)
 
 
 # ============================================================
@@ -601,17 +553,13 @@ async def generate_info(
     ingredient_id: int,
     db,
 ):
-    """
-    Estimate a storage duration and store the resulting calendar date.
-
-    The database currently has a legacy column spelling:
-    items.experation_date. The API inventory response aliases it
-    to the correctly spelled expiration_date.
-    """
-
-    name = await db.fetchval(
+    """Estimate and save a date for an existing item that has no date yet."""
+    item = await db.fetchrow(
         """
-        SELECT global_ingredients.name
+        SELECT
+            items.id,
+            items.expiration_date,
+            global_ingredients.name
         FROM items
         JOIN global_ingredients
             ON items.ingredient_id = global_ingredients.id
@@ -622,16 +570,22 @@ async def generate_info(
         ingredient_id,
     )
 
-    if not name:
+    if item is None:
         raise HTTPException(
             status_code=404,
             detail="Ingredient not found.",
         )
 
-    try:
-        duration_text = await generate_expiration_date(name)
-        expiration = _storage_life_to_date(duration_text)
+    if item["expiration_date"] is not None:
+        return {
+            "ingredient_id": ingredient_id,
+            "expiration_date": item["expiration_date"].isoformat(),
+            "estimated_storage_life": None,
+            "already_estimated": True,
+        }
 
+    try:
+        expiration, duration_text = await estimate_expiration_date(item["name"])
     except (ValueError, TypeError) as error:
         print("EXPIRATION DATE PARSING ERROR:", repr(error))
         raise HTTPException(
@@ -648,12 +602,12 @@ async def generate_info(
     await db.execute(
         """
         UPDATE items
-        SET experation_date = $1
-        WHERE ingredient_id = $2
+        SET expiration_date = $1
+        WHERE id = $2
           AND users_id = $3
         """,
         expiration,
-        ingredient_id,
+        item["id"],
         user_id,
     )
 
@@ -661,6 +615,7 @@ async def generate_info(
         "ingredient_id": ingredient_id,
         "expiration_date": expiration.isoformat(),
         "estimated_storage_life": duration_text,
+        "already_estimated": False,
     }
 
 
