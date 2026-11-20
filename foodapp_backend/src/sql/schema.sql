@@ -24,12 +24,12 @@ CREATE TABLE "items" (
 	CONSTRAINT "items_storage_location_check" CHECK ((storage_location = ANY (ARRAY['fridge'::text, 'freezer'::text, 'dry'::text])))
 );
 CREATE TABLE "preferences" (
-	"id" serial PRIMARY KEY,
-	"users_id" integer NOT NULL,
-	"allergies" text,
-	"cuisine_pref" text,
-	"diet_pref" text,
-	"is_glutenfree" boolean DEFAULT false
+	"users_id" integer,
+	"allergies" text[] DEFAULT '{}' NOT NULL,
+	"cuisines" text[] DEFAULT '{}' NOT NULL,
+	"diets" text[] DEFAULT '{}' NOT NULL,
+	"is_glutenfree" boolean DEFAULT false NOT NULL,
+	CONSTRAINT "preferences_pkey1" PRIMARY KEY("users_id")
 );
 CREATE TABLE "recipe_cookings" (
 	"id" bigserial PRIMARY KEY,

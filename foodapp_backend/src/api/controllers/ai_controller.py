@@ -10,12 +10,7 @@ from src.api.services.ai_service import (
 )
 from src.api.controllers.items_controllers import get_items_controller
 from src.api.services.expiration_service import estimate_expiration_date
-from src.api.controllers.preferences_controller import (
-    get_allergies_controller,
-    get_cuisine_controller,
-    get_diet_controller,
-    get_gluten_free_controller,
-)
+from src.api.controllers.preferences_controller import (get_preferences_controller)
 
 
 # ============================================================
@@ -34,28 +29,15 @@ def _decode_json_value(value):
 # ============================================================
 
 async def _get_user_context(user_id: int, db):
-    """Retrieve the user's complete inventory and preferences."""
-
     result = await get_items_controller(user_id, db)
-    items = result["items"]
-
-    allergies = (
-        await get_allergies_controller(user_id, db)
-    )["allergies"]
-
-    cuisine = (
-        await get_cuisine_controller(user_id, db)
-    )["cuisines"]
-
-    diet = (
-        await get_diet_controller(user_id, db)
-    )["diets"]
-
-    gluten_free = (
-        await get_gluten_free_controller(user_id, db)
-    )["gluten_free"]
-
-    return items, allergies, cuisine, diet, gluten_free
+    prefs = await get_preferences_controller(user_id, db)
+    return (
+        result["items"],
+        prefs["allergies"],
+        prefs["cuisines"],
+        prefs["diets"],
+        prefs["gluten_free"],
+    )
 
 
 # ============================================================
