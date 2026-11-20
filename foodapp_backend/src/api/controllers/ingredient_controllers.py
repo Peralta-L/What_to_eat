@@ -35,7 +35,13 @@ async def search_ingredient_controller(ingredient: str):
                 FROM global_ingredients
                 WHERE
                     name ILIKE $1
-                    AND name ~* '(^|[^[:alnum:]])raw([^[:alnum:]]|$)'
+
+                    -- Include raw ingredients, cheese, milk and bread.
+                    AND name ~* '(^|[^[:alnum:]])(raw|cheeses?|milks?|bread)([^[:alnum:]]|$)'
+
+                    -- Always exclude unwanted products.
+                    AND name !~* '(^|[^[:alnum:]])(soups?|dumplings?|icings?|fillings?|breaded)([^[:alnum:]]|$)'
+
                 ORDER BY
                     CASE
                         WHEN name ILIKE $2 THEN 0
