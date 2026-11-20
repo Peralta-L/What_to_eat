@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from src.api.routes import ai_food, auth, items, food, ingredient, preferences, recipes
+from src.api.routes import ai_food, auth, items, ingredient, preferences, recipes
 from src.core.database import get_db, connect_db, close_db
 
 @asynccontextmanager
@@ -30,7 +30,6 @@ app.include_router(ai_food.router, prefix="/api/ai_food", tags=["ai_food"])
 # (e.g. items.py has @router.get("/items")), so the prefix stays just "/api"
 # to avoid ending up with doubled paths like /api/items/items.
 app.include_router(items.router, prefix="/api", tags=["items"])
-app.include_router(food.router, prefix="/api", tags=["food"])
 app.include_router(ingredient.router, prefix="/api", tags=["ingredient"])
 app.include_router(recipes.router, prefix="/api", tags=["recipes"])
 
