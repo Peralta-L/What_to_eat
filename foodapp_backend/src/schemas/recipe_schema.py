@@ -11,7 +11,7 @@ class CookRecipeRequest(BaseModel):
 class GenerateRecipesRequest(BaseModel):
     idempotency_key: UUID
     meal_type: Literal["breakfast", "lunch", "dinner"] = "lunch"
-    count: int = Field(default=3, ge=1, le=5)
+    count: int = Field(default=5, ge=1, le=5)
 
 
 class GenerateSelectedRecipesRequest(BaseModel):
