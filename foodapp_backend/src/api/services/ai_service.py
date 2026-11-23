@@ -306,6 +306,7 @@ async def generate_recipe_from_items(
     cuisine: list[str],
     diet: list[str],
     gluten_free: bool = False,
+    meal_type: str = "lunch",
 ):
     """Generate multiple recipes using the user's actual inventory."""
 
@@ -327,10 +328,11 @@ Allergies: {json.dumps(allergies)}
 Preferred cuisines: {json.dumps(cuisine)}
 Dietary preferences: {json.dumps(diet)}
 Gluten-free requirement: {gluten_free}
+Selected meal type: {meal_type}
 
 TASK:
 
-Generate up to 8 different recipes that the user can prepare
+Generate up to 8 different {meal_type}-appropriate recipes that the user can prepare
 using ONLY the ingredients listed in their inventory.
 
 IMPORTANT RULES:
@@ -429,6 +431,7 @@ async def generate_search_recipe(
     cuisine: list[str],
     diet: list[str],
     gluten_free: bool = False,
+    meal_type: str = "lunch",
 ):
     """Generate one recipe matching a user's search request."""
 
@@ -449,10 +452,11 @@ Allergies: {json.dumps(allergies)}
 Preferred cuisines: {json.dumps(cuisine)}
 Dietary preferences: {json.dumps(diet)}
 Gluten-free requirement: {gluten_free}
+Selected meal type: {meal_type}
 
 TASK:
 
-Generate the recipe that best matches the user's request.
+Generate the recipe that best matches the user's request and is appropriate for {meal_type}.
 
 RULES:
 
