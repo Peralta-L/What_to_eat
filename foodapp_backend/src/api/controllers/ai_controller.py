@@ -307,6 +307,7 @@ async def _generate_and_save_recipe_batch(
             diet,
             gluten_free,
             meal_type,
+            count,
         )
 
         recipes = result.get("recipes") if isinstance(result, dict) else None
