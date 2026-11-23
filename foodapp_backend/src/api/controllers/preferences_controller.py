@@ -53,6 +53,10 @@ async def update_preferences_controller(user_id: int, prefs: Preferences, db):
                   WHERE f.users_id = r.users_id AND f.recipe_id = r.id
               )
               AND NOT EXISTS (
+                  SELECT 1 FROM saved_recipes sr
+                  WHERE sr.users_id = r.users_id AND sr.recipe_id = r.id
+              )
+              AND NOT EXISTS (
                   SELECT 1 FROM recipe_cookings c
                   WHERE c.users_id = r.users_id AND c.recipe_id = r.id
               )
