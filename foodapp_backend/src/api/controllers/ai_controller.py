@@ -328,6 +328,7 @@ async def _generate_and_save_recipe_batch(
                         detail="The AI returned an invalid recipe.",
                     )
 
+                recipe["meal_type"] = meal_type
                 saved = await _save_recipe(
                     db=db,
                     user_id=user_id,
@@ -402,7 +403,7 @@ async def generate_ai_recipe(
             meal_type=meal_type,
             count=count,
             source="ai",
-            generation_type=f"fridge:{meal_type}:{count}",
+            generation_type="fridge",
             idempotency_key=idempotency_key,
             db=db,
         )
@@ -489,7 +490,7 @@ async def generate_selected_recipes(
             meal_type=meal_type,
             count=5,
             source="selected",
-            generation_type=f"selected:{meal_type}",
+            generation_type="selected",
             idempotency_key=idempotency_key,
             db=db,
         )
@@ -561,6 +562,10 @@ async def generate_search_recipe(
                 source="search",
                 request=request.strip(),
             )
+
+        # A search is an intentional discovery action: move the same recipe
+        # record to the top of History without creating a duplicate row.
+        await record_recipe_view_controller(user_id, int(saved["id"]), db)
 
         return {
             "message": "Recipe generated successfully.",
