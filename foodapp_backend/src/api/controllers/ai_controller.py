@@ -24,6 +24,22 @@ def _decode_json_value(value):
     return value
 
 
+def _recipe_signature(content: dict) -> tuple:
+    """Stable identity for the same dish, independent of generated wording."""
+    title = " ".join(str(content.get("title", "")).casefold().split())
+    ingredients = []
+    for ingredient in content.get("ingredients", []):
+        if not isinstance(ingredient, dict):
+            continue
+        ingredient_id = ingredient.get("ingredient_id")
+        identity = str(ingredient_id) if ingredient_id is not None else " ".join(
+            str(ingredient.get("name", "")).casefold().split()
+        )
+        unit = " ".join(str(ingredient.get("unit", "")).casefold().split())
+        ingredients.append((identity, unit))
+    return title, tuple(sorted(ingredients))
+
+
 # ============================================================
 # 1. GET USER CONTEXT
 # ============================================================
@@ -51,6 +67,27 @@ async def _save_recipe(
     source: str = "ai",
     request: str | None = None,
 ) -> dict:
+    # Serialize same-user recipe writes so concurrent searches/generations
+    # cannot save the same dish twice.
+    await db.execute("SELECT pg_advisory_xact_lock(73112, $1::INTEGER)", user_id)
+    existing_rows = await db.fetch(
+        """
+        SELECT id, users_id, source, request, content, created_at, cooked_at
+        FROM recipes
+        WHERE users_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 300
+        """,
+        user_id,
+    )
+    signature = _recipe_signature(content)
+    for existing in existing_rows:
+        existing_content = _decode_json_value(existing["content"])
+        if _recipe_signature(existing_content) == signature:
+            saved_recipe = dict(existing)
+            saved_recipe["content"] = existing_content
+            return saved_recipe
+
     row = await db.fetchrow(
         """
         INSERT INTO recipes (
@@ -60,7 +97,7 @@ async def _save_recipe(
             content
         )
         VALUES ($1, $2, $3, $4)
-        RETURNING id, users_id, source, request, content, created_at
+        RETURNING id, users_id, source, request, content, created_at, cooked_at
         """,
         user_id,
         source,
@@ -244,6 +281,8 @@ async def _generate_and_save_recipe_batch(
     cuisine: list[str],
     diet: list[str],
     gluten_free: bool,
+    meal_type: str,
+    count: int,
     source: str,
     generation_type: str,
     idempotency_key: UUID,
@@ -266,6 +305,8 @@ async def _generate_and_save_recipe_batch(
             cuisine,
             diet,
             gluten_free,
+            meal_type,
+            count,
         )
 
         recipes = result.get("recipes") if isinstance(result, dict) else None
@@ -275,8 +316,8 @@ async def _generate_and_save_recipe_batch(
                 detail="The AI did not return any recipes.",
             )
 
-        # Hard server-side cap: one generation action stores no more than five.
-        recipes = recipes[:5]
+        # Enforce the requested batch size server-side (never more than five).
+        recipes = recipes[:max(1, min(count, 5))]
         saved_recipes = []
 
         async with db.transaction():
@@ -287,6 +328,7 @@ async def _generate_and_save_recipe_batch(
                         detail="The AI returned an invalid recipe.",
                     )
 
+                recipe["meal_type"] = meal_type
                 saved = await _save_recipe(
                     db=db,
                     user_id=user_id,
@@ -337,6 +379,8 @@ async def generate_ai_recipe(
     user_id: int,
     idempotency_key: UUID,
     db,
+    meal_type: str = "lunch",
+    count: int = 3,
 ):
     try:
         items, allergies, cuisine, diet, gluten_free = await _get_user_context(
@@ -356,6 +400,8 @@ async def generate_ai_recipe(
             cuisine=cuisine,
             diet=diet,
             gluten_free=gluten_free,
+            meal_type=meal_type,
+            count=count,
             source="ai",
             generation_type="fridge",
             idempotency_key=idempotency_key,
@@ -381,6 +427,7 @@ async def generate_selected_recipes(
     ingredient_ids: list[int],
     idempotency_key: UUID,
     db,
+    meal_type: str = "lunch",
 ):
     try:
         if not ingredient_ids:
@@ -440,6 +487,8 @@ async def generate_selected_recipes(
             cuisine=cuisine,
             diet=diet,
             gluten_free=gluten_free,
+            meal_type=meal_type,
+            count=5,
             source="selected",
             generation_type="selected",
             idempotency_key=idempotency_key,
@@ -464,6 +513,7 @@ async def generate_search_recipe(
     user_id: int,
     request: str,
     db,
+    meal_type: str = "lunch",
 ):
     try:
         if not request or not request.strip():
@@ -493,6 +543,7 @@ async def generate_search_recipe(
             cuisine,
             diet,
             gluten_free,
+            meal_type,
         )
 
         recipe_content = result.get("recipe")
@@ -501,6 +552,7 @@ async def generate_search_recipe(
                 status_code=502,
                 detail="The AI did not return a valid recipe.",
             )
+        recipe_content["meal_type"] = meal_type
 
         async with db.transaction():
             saved = await _save_recipe(
@@ -510,6 +562,10 @@ async def generate_search_recipe(
                 source="search",
                 request=request.strip(),
             )
+
+        # A search is an intentional discovery action: move the same recipe
+        # record to the top of History without creating a duplicate row.
+        await record_recipe_view_controller(user_id, int(saved["id"]), db)
 
         return {
             "message": "Recipe generated successfully.",
