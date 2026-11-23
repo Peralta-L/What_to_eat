@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 
 from src.core.database import get_db
@@ -36,6 +38,8 @@ async def generate_recipe(
         user_id,
         payload.idempotency_key,
         db,
+        payload.meal_type,
+        payload.count,
     )
 
 
@@ -50,16 +54,18 @@ async def generate_selected_recipe_batch(
         payload.ingredient_ids,
         payload.idempotency_key,
         db,
+        payload.meal_type,
     )
 
 
 @router.get("/search-recipes")
 async def search_recipes(
     request: str = Query(..., min_length=3, max_length=200),
+    meal_type: Literal["breakfast", "lunch", "dinner"] = "lunch",
     user_id: int = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    return await generate_search_recipe(user_id, request, db)
+    return await generate_search_recipe(user_id, request, db, meal_type)
 
 
 @router.get("/recipes")
