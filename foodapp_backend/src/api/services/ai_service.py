@@ -306,6 +306,8 @@ async def generate_recipe_from_items(
     cuisine: list[str],
     diet: list[str],
     gluten_free: bool = False,
+    meal_type: str = "lunch",
+    count: int = 5,
 ):
     """Generate multiple recipes using the user's actual inventory."""
 
@@ -327,10 +329,11 @@ Allergies: {json.dumps(allergies)}
 Preferred cuisines: {json.dumps(cuisine)}
 Dietary preferences: {json.dumps(diet)}
 Gluten-free requirement: {gluten_free}
+Selected meal type: {meal_type}
 
 TASK:
 
-Generate up to 8 different recipes that the user can prepare
+Generate up to {count} different {meal_type}-appropriate recipes that the user can prepare
 using ONLY the ingredients listed in their inventory.
 
 IMPORTANT RULES:
@@ -344,7 +347,7 @@ IMPORTANT RULES:
 7. Prefer recipes that use ingredients efficiently.
 8. Recipes should be varied and realistic.
 9. Do not include optional ingredients that are not in the inventory.
-10. If there are not enough ingredients for 8 recipes, return fewer.
+10. If there are not enough ingredients for {count} recipes, return fewer.
 11. Nutrition values should be estimates, not guaranteed laboratory values.
 
 RETURN ONLY JSON IN THIS FORMAT:
@@ -392,8 +395,8 @@ RETURN ONLY JSON IN THIS FORMAT:
     if not isinstance(recipes, list) or not recipes:
         raise ValueError("The AI did not generate any valid recipes.")
 
-    if len(recipes) > 8:
-        recipes = recipes[:8]
+    if len(recipes) > count:
+        recipes = recipes[:count]
 
     return {
         "recipes": _validate_inventory_ingredients(
@@ -429,6 +432,7 @@ async def generate_search_recipe(
     cuisine: list[str],
     diet: list[str],
     gluten_free: bool = False,
+    meal_type: str = "lunch",
 ):
     """Generate one recipe matching a user's search request."""
 
@@ -449,10 +453,11 @@ Allergies: {json.dumps(allergies)}
 Preferred cuisines: {json.dumps(cuisine)}
 Dietary preferences: {json.dumps(diet)}
 Gluten-free requirement: {gluten_free}
+Selected meal type: {meal_type}
 
 TASK:
 
-Generate the recipe that best matches the user's request.
+Generate the recipe that best matches the user's request and is appropriate for {meal_type}.
 
 RULES:
 
